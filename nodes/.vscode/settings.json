@@ -1,0 +1,12 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/yifei/kuka_davin_ws/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages",
+        "/home/yifei/Documents/avion"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/yifei/kuka_davin_ws/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages",
+        "/home/yifei/Documents/avion"
+    ]
+}

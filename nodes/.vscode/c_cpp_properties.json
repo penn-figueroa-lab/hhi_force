@@ -1,0 +1,40 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/yifei/kuka_davin_ws/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/home/yifei/kuka_davin_ws/src/robot_admittance_controller/include/**",
+        "/home/yifei/kuka_davin_ws/src/bota_driver/bota_node/bota_node/include/**",
+        "/home/yifei/kuka_davin_ws/src/bota_driver/bota_node/bota_signal_handler/include/**",
+        "/home/yifei/kuka_davin_ws/src/bota_driver/bota_node/bota_worker/include/**",
+        "/home/yifei/kuka_davin_ws/src/ds_admittance_control/include/**",
+        "/home/yifei/kuka_davin_ws/src/dual_iiwa_toolkit/include/**",
+        "/home/yifei/kuka_davin_ws/src/iiwa_ros/iiwa_control/include/**",
+        "/home/yifei/kuka_davin_ws/src/iiwa_ros/iiwa_driver/include/**",
+        "/home/yifei/kuka_davin_ws/src/iiwa_ros/iiwa_gazebo/include/**",
+        "/home/yifei/kuka_davin_ws/src/iiwa_interactive_controller/include/**",
+        "/home/yifei/kuka_davin_ws/src/iiwa_ros/iiwa_tools/include/**",
+        "/home/yifei/kuka_davin_ws/src/kr_planning_msgs/kr_planning_rviz_plugins/include/**",
+        "/home/yifei/kuka_davin_ws/src/natnet_ros_cpp/include/**",
+        "/home/yifei/kuka_davin_ws/src/robotiq_ft300_sensor/robotiq_force_torque_sensor_custom/include/**",
+        "/home/yifei/kuka_davin_ws/src/bota_driver/rokubimini/include/**",
+        "/home/yifei/kuka_davin_ws/src/bota_driver/rokubimini_bus_manager/include/**",
+        "/home/yifei/kuka_davin_ws/src/bota_driver/rokubimini_ethercat/include/**",
+        "/home/yifei/kuka_davin_ws/src/bota_driver/rokubimini_serial/include/**",
+        "/home/yifei/kuka_davin_ws/src/task_adaptation/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}
