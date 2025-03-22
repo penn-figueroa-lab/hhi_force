@@ -92,9 +92,9 @@ class SensorSyncPublisher(object):
 
         # Subscribers
         self.listener = tf.TransformListener()
-        self.xela_sub = rospy.Subscriber('xServTopic', SensStream, self.xela_callback)
+        self.xela_sub = rospy.Subscriber('xServTopic', SensStream, self.xela_callback, tcp_nodelay=True)
         self.ft_wrench_sub = rospy.Subscriber('/bus0/ft_sensor0/ft_sensor_readings/wrench', WrenchStamped, self.ft_callback)
-        # self.ft_reading_sub = rospy.Subscriber("/bus0/ft_sensor0/ft_sensor_readings/reading", Reading, self.ft_reading_callback)
+        # self.ft_reading_sub = rospy.Subscriber("/bus0/ft_sensor0/ft_sensor_readings/reading", Reading, self.ft_reading_callback, tcp_nodelay=True)
         self.robot_state_sub = rospy.Subscriber("/iiwa/task_states", Pose, self.robot_callback, tcp_nodelay=True)
 
         # Buffers to hold latest sensor data
@@ -126,9 +126,7 @@ class SensorSyncPublisher(object):
     def get_wrench_rotation(self):
         try:
             (trans, rot) = self.listener.lookupTransform('world', 'ft_sensor_frame_id', rospy.Time(0))
-            self.tf_world_to_ft = Pose()
-            self.tf_world_to_ft.position = trans
-            self.tf_world_to_ft.orientation = rot
+            self.tf_world_to_ft = quaternion_pos_to_pose(rot, trans)
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             rospy.logerr_throttle(3.0, "No tf from world to FT_sensor")
             return      
