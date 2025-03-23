@@ -2,7 +2,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import copy
-from plot_util import generate_surface, plot_sample
 from functools import partial
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import PointCloud
@@ -16,7 +15,7 @@ import rospkg
 from std_msgs.msg import Header, Float32, Float64MultiArray
 from geometry_msgs.msg import WrenchStamped, Pose, Twist, TwistStamped, Point,Quaternion, PoseArray
 from nav_msgs.msg import Odometry
-from rokubimini_msgs import Reading
+# from rokubimini_msgs import Reading
 from xela_server_ros.msg import SensStream
 from visualization_msgs.msg import Marker
 
@@ -152,4 +151,5 @@ def main():
 
 
 if __name__ == '__main__':
+    print("Starting Sensor Sync Publisher")
     main()

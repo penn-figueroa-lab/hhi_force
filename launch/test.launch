@@ -24,23 +24,19 @@
     <param name="control_interface"   value="$(arg control_interface)"/>
     <rosparam file="$(arg params_yaml_file)" command="load"/>
     
-    <group ns="ft_sensor">
-        <param name="ft_sensor_model" value="rokubimini_ethercat" />
-        <include file="$(find ${ft_sensor_model})/launch/${ft_sensor_model}.launch">
-        </include>
-    </group>
+    <param name="ft_sensor_model" value="rokubimini_ethercat" />
+    <include file="$(find rokubimini_ethercat)/launch/rokubimini_ethercat.launch">
+    </include>
 
     <!-- FT_sensor calibrarion -->
     <!-- rosservice call /bus0/ft_sensor0/reset_wrench "desired_wrench: {force: {x: 0.0, y: 0.0, z: 0.0}, torque: {x: 0.0, y: 0.0, z: 0.0}}" -->
     
-    <group ns="xela_sensor">
-        <include file="$(find ${xela_server_ros})/launch/service.launch">
-        </include>
-    </group>
+    <include file="$(find xela_server_ros)/launch/service.launch">
+    </include>
 
     <node pkg="tf" type="static_transform_publisher" name="force_sensor_tf_pub" args="0 0 0.0375 0 0 0.707 0.707 iiwa_link_ee ft_sensor_frame_id 100" />
     
-    <node name="synced_publisher" pkg="hhi_force" type="xela_text.py" output="screen"/>
+    <node name="synced_publisher" pkg="hhi_force" type="xela_test.py" output="screen"/>
 
 
     <!-- <node name="rq_sensor_custom" pkg="robotiq_force_torque_sensor_custom" type="rq_sensor_custom" />
