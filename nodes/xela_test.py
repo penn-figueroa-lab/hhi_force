@@ -84,29 +84,34 @@ class SensorSyncPublisher(object):
         # self.ft_wrench_pub  = rospy.Publisher('/bus0/ft_sensor0/ft_sensor_readings/wrench', WrenchStamped, queue_size=10)
         # self.ft_reading_pub = rospy.Publisher("/bus0/ft_sensor0/ft_sensor_readings/reading", Reading, queue_size=10)
         # self.object_vis_pub = rospy.Publisher('/object_vis_marker', Marker, queue_size=10)
-        self.xela_data_pub = rospy.Publisher('/xela_data', SensStream, queue_size=10)
-        self.ft_wrench_pub = rospy.Publisher('/ft_wrench_data', WrenchStamped, queue_size=10)
-        self.robot_pose_pub = rospy.Publisher('/iiwa_ee_pose', Pose, queue_size=10)
-        self.tf_world_to_ft_pub = rospy.Publisher('/ft_world_tf', Pose, queue_size=10)
+        self.xela_data_pub = rospy.Publisher('/xela_data', SensStream, queue_size=100)
+        self.ft_wrench_pub = rospy.Publisher('/ft_wrench_data', WrenchStamped, queue_size=100)
+        self.robot_pose_pub = rospy.Publisher('/iiwa_ee_pose', Pose, queue_size=100)
+        self.tf_world_to_ft_pub = rospy.Publisher('/ft_world_tf', Pose, queue_size=100)
 
         # Subscribers
         self.listener = tf.TransformListener()
         self.xela_sub = rospy.Subscriber('xServTopic', SensStream, self.xela_callback, tcp_nodelay=True)
-        self.ft_wrench_sub = rospy.Subscriber('/bus0/ft_sensor0/ft_sensor_readings/wrench', WrenchStamped, self.ft_callback)
+        self.ft_wrench_sub = rospy.Subscriber('/bus0/ft_sensor0/ft_sensor_readings/wrench', WrenchStamped, self.ft_callback, tcp_nodelay=True)
         # self.ft_reading_sub = rospy.Subscriber("/bus0/ft_sensor0/ft_sensor_readings/reading", Reading, self.ft_reading_callback, tcp_nodelay=True)
         self.robot_state_sub = rospy.Subscriber("/iiwa/task_states", Pose, self.robot_callback, tcp_nodelay=True)
 
-        # Buffers to hold latest sensor data
+        self.h = Header()
+        self.h.frame_id = 'world'
+        self.h.stamp = rospy.Time.now()
+
         self.xela_data = None
         self.ft_wrench_data = None
-        self.robot_pose_data = None
-        self.tf_world_to_ft = Pose()
+        self.robot_pose_data = None   
+        self.tf_world_to_ft = None
 
         # Publishing rate
         self.rate = rospy.Rate(100)  # 100 Hz
 
     def xela_callback(self, msg):
-        self.xela_data = msg
+        self.xela_data = SensStream()
+        self.xela_data.header = self.header
+        self.xela_data = msg.sensors
         sensors = msg.sensors
         rospy.loginfo("-------------------------")
         rospy.loginfo("Broadcast: %s sensor(s)", len(sensors))
@@ -116,13 +121,22 @@ class SensorSyncPublisher(object):
                           "with" if sensor.forces else "without")
             
     def ft_callback(self, msg):
+        self.ft_wrench_data = WrenchStamped()
+        self.ft_wrench_data.header = self.h
         self.ft_wrench_data = msg
         rospy.loginfo("Received force: %s", msg.wrench.force)
 
     def robot_callback(self, msg):
+        self.robot_pose_data = Pose()
+        self.robot_pose_data.header = self.h
         self.robot_pose_data = msg
+        rospy.loginfo("Received robot pose: %s", msg.position
+                      # msg.position.x, msg.position.y, msg.position.z
+                      )
 
     def get_wrench_rotation(self):
+        self.tf_world_to_ft = Pose()
+        self.tf_world_to_ft.header = self.h
         try:
             (trans, rot) = self.listener.lookupTransform('world', 'ft_sensor_frame_id', rospy.Time(0))
             self.tf_world_to_ft = quaternion_pos_to_pose(rot, trans)
@@ -137,8 +151,9 @@ class SensorSyncPublisher(object):
                 self.xela_data_pub.publish(self.xela_data)
                 self.ft_wrench_pub.publish(self.ft_wrench_data)
                 self.robot_pose_pub.publish(self.robot_pose_data)
-            if self.robot_pose_data:
                 self.tf_world_to_ft_pub.publish(self.tf_world_to_ft)
+            else:
+                rospy.logwarn("Some data is missing")
             self.rate.sleep()
 
 
