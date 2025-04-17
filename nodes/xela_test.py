@@ -135,8 +135,6 @@ class SensorSyncPublisher(object):
                       )
 
     def get_wrench_rotation(self):
-        self.tf_world_to_ft = Pose()
-        self.tf_world_to_ft.header = self.h
         try:
             (trans, rot) = self.listener.lookupTransform('world', 'ft_sensor_frame_id', rospy.Time(0))
             self.tf_world_to_ft = quaternion_pos_to_pose(rot, trans)

@@ -1,0 +1,13 @@
+<launch>
+    <!-- Run the Python script to play all .bag files in the specified directory -->
+    <node pkg="hhi_force" type="bag_play_script.py" name="play_bags" />
+
+    <node pkg="hhi_force" type="bag_repub.py" name="topic_repub" output="screen"/>
+    
+    <!-- Launch PlotJuggler -->
+    <!-- <node pkg="plotjuggler" type="plotjuggler" name="plotjuggler" args="-layout $(find hhi_force)/test/traj_force_torque_viz.xml" output="screen"/> -->
+
+    <!-- <node pkg="plotjuggler" type="plotjuggler" name="plotjuggler" output="screen">
+        <param name="layout" value="$(find hhi_force)/test/traj_force_torque_viz.xml"/>
+    </node> -->
+</launch>

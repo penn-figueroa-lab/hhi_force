@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   iiwa_tools
   xela_server_ros
+  
 )
 
 ## Declare ROS messages, services, and actions
@@ -62,6 +63,8 @@ include_directories(
 catkin_install_python(PROGRAMS
   nodes/xela_test.py
   nodes/AB_Pub.py
+  nodes/umi_pose_publisher.py
+  nodes/dual_cam_umi_pose_publisher_2cams.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
