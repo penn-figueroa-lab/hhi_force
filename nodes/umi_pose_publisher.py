@@ -12,8 +12,24 @@ from geometry_msgs.msg import Vector3
 from visualization_msgs.msg import Marker
 import os
 
-np.set_printoptions(suppress=True)
+# Load calibration: umi_tag → gripper transform (not needed anymore)
+def find_transform(tag_id):
+    # Load the transforms from a file if the file exists
+    try:
+        # load file from the same folder as this node
+        file_path = os.path.dirname(os.path.abspath(__file__))
+        # print("file_path", file_path)
 
+        transforms = np.load(os.path.join(file_path, 'calibrated_transforms.npz'), allow_pickle=True)
+        return transforms[f'from_{tag_id}']
+    except FileNotFoundError:
+        # rospy.logerr("Calibration file not found.")
+        umi_to_gripper = np.array([ [1, 0, 0, 0],
+                                    [0, 1, 0, umi_tag_size/2],
+                                    [0, 0, 1, 0.25],
+                                    [0, 0, 0, 1] ])
+        return umi_to_gripper   
+    
 def create_text_marker(text, position, frame_id="world", marker_id=0):
     marker = Marker()
     marker.header.frame_id = frame_id
@@ -51,52 +67,21 @@ def create_pose_msg(matrix, frame_id):
     pose_msg.pose.orientation.w = quat[3]
     return pose_msg
 
-# Transform from camera to world frame (can be replaced with OptiTrack)
-# rotate to switch z and x axis
-# camera_to_world = np.array([[0, 0, 1, 1],
-#                            [0, 1, 0, 1],
-#                            [-1, 0, 0, 1],
-#                            [0, 0, 0, 1]])
-# rotate to switch z and x axis
-# camera_to_world = np.array([[0, 0, -1, 0],
-#                            [0, 1, 0, 0],
-#                            [1, 0, 0, 0],
-#                            [0, 0, 0, 1]])
-camera_to_world = np.array([[1, 0, 0, 1],
-                            [0, 1, 0, 1],
-                            [0, 0, 1, 1],
-                            [0, 0, 0, 1]])
 
+np.set_printoptions(suppress=True)
 
 # Initialize ROS node
 rospy.init_node('umi_gripper_pose_publisher')
-umi_pose_pub = rospy.Publisher('/umi_ee/umi_pose_camera', PoseStamped, queue_size=10)
-base_pose_pub = rospy.Publisher('/umi_ee/base_pose_camera', PoseStamped, queue_size=10)
-umi_pose_world_pub = rospy.Publisher('/umi_ee/umi_pose_base', PoseStamped, queue_size=10)
-camera_pose_pub = rospy.Publisher('/umi_ee/camera_pose', PoseStamped, queue_size=10)
 
-marker_pub = rospy.Publisher('/umi_ee/markers', Marker, queue_size=10)
+# Publishers
+umi_cube_pose_pub = rospy.Publisher('/umi_pose_camera', PoseStamped, queue_size=10)
+umi_ee_pose_pub = rospy.Publisher('/umi_ee_pose_camera', PoseStamped, queue_size=10)
+base_pose_pub = rospy.Publisher('/base_pose_camera', PoseStamped, queue_size=10)
+umi_pose_world_pub = rospy.Publisher('umi_pose_base', PoseStamped, queue_size=10)
+camera_pose_pub = rospy.Publisher('camera_pose', PoseStamped, queue_size=10)
+marker_pub = rospy.Publisher('markers', Marker, queue_size=10)
 
 tf_broadcaster = tf.TransformBroadcaster()
-
-# Load calibration: umi_tag → gripper transform
-def find_transform(tag_id):
-    # Load the transforms from a file if the file exists
-    try:
-        # load file from the same folder as this node
-        file_path = os.path.dirname(os.path.abspath(__file__))
-        # print("file_path", file_path)
-
-        transforms = np.load(os.path.join(file_path, 'calibrated_transforms.npz'), allow_pickle=True)
-        return transforms[f'from_{tag_id}']
-    except FileNotFoundError:
-        # rospy.logerr("Calibration file not found.")
-        umi_to_gripper = np.array([[1, 0, 0, 0],
-                                   [0, 1, 0, 0],
-                                   [0, 0, 1, 0.2],
-                                   [0, 0, 0, 1]])
-        return umi_to_gripper    
-
 
 
 # Start RealSense
@@ -115,8 +100,19 @@ K = np.array([[intr.fx, 0, intr.ppx],
               [0, intr.fy, intr.ppy],
               [0, 0, 1]])
 camera_params = (intr.fx, intr.fy, intr.ppx, intr.ppy)
-umi_tag_size = 0.040
-base_tag_size = 0.050
+umi_tag_size = 0.050
+base_tag_size = 0.040
+
+# Transform from camera to world frame (can be replaced with OptiTrack)
+camera_to_world = np.array([[1, 0, 0, 1],
+                            [0, 1, 0, 1],
+                            [0, 0, 1, 1],
+                            [0, 0, 0, 1]])
+
+umi_to_gripper = np.array([[1, 0, 0, 0],
+                           [0, 1, 0, umi_tag_size/2+0.025],
+                           [0, 0, 1, 0.26],
+                           [0, 0, 0, 1]])
 
 # List of valid tag IDs for the base and umi with predefined rotation matrices
 base_tags = {
@@ -129,10 +125,10 @@ base_tags = {
 }
 
 umi_tags = {
-    579: np.eye(3), #np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]]),
-    580: np.eye(3), #np.array([[0, 1, 0], [0, 0, -1], [-1, 0, 0]]),    ## 90 deg around y axis: np.array([[0, 1, 0], [0, 0, -1], [-1, 0, 0]]),
-    581: np.eye(3),
-    582: np.eye(3),
+    579: np.eye(3), 
+    580: np.array([[0, 0, -1], [0, 1, 0], [1, 0, 0]]),   ## 90 deg around y axis
+    581: np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]]),   #np.array([[0, -1, 0], [0, 0, -1], [1, 0, 0]]), 
+    582: np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]]),   ## -90 deg around y axis
     583: np.eye(3),
     584: np.eye(3)
 }
@@ -140,7 +136,6 @@ umi_tags = {
 # umi_tags = {579, 580, 581, 582}
 # base_tags = {17, 19, 21}
 pixel_coordinates_list = []
-
 
 while not rospy.is_shutdown():
     frames = pipe.wait_for_frames()
@@ -150,42 +145,32 @@ while not rospy.is_shutdown():
     cv2.namedWindow('RealSense', cv2.WINDOW_AUTOSIZE)
 
     detected_tags = detector.detect(gray_image)
-    umi_cube_poses = []
-    ee_poses = []
-    base_cube_poses = []
+    umi_cube_centers = []
+    base_cube_centers = []
 
     for tag in detected_tags:
         tag_id = tag.tag_id
         print("Detected tag ID:", tag.tag_id)
 
-        # position = (tag.center[0], tag.center[1], 0.0)  # Replace with 3D position if available
-        # marker = create_text_marker(f"ID: {tag_id}", position, frame_id="camera", marker_id=tag_id)
-        # marker_pub.publish(marker)
-
         if tag_id in umi_tags:
             tag_pose = detector.detection_pose(tag, camera_params, umi_tag_size, z_sign=1)[0]
-            # Calculate the gripper pose using the transform file
-            transform = find_transform(tag_id)
-
             umi_cube_pose = tag_pose
-            # Calculate the cube center position based on the tag's position
-            umi_cube_pose[0:3, 3] = tag_pose[:3, 3] + tag_pose[0:3, 0:3] @ np.array([0, 0, umi_tag_size/2])
-            umi_cube_pose[0:3, 0:3] = tag_pose[0:3, 0:3] #@ transform[0:3, 0:3]
-            umi_cube_poses.append(umi_cube_pose)
 
-            ee_pose = tag_pose @ transform
-            print(transform)
-            ee_poses.append(ee_pose)
+            # # Calculate the gripper pose using the transform file (find_transform(tag_id)) or tags' pose
+            # transform = find_transform(tag_id)
+            umi_cube_center = tag_pose[:3, 3] + tag_pose[0:3, 0:3] @ np.array([0, 0, umi_tag_size/2])
+            umi_cube_pose[0:3, 0:3] = tag_pose[0:3, 0:3] @ umi_tags[tag_id] #@ transform[0:3, 0:3]
+            umi_cube_centers.append(umi_cube_center)
 
         elif tag_id in base_tags:
             tag_pose = detector.detection_pose(tag, camera_params, umi_tag_size, z_sign=1)[0]
             # base_pose = tag_pose # directly the base is the zero
             # base_poses.append(base_pose)
             base_cube_pose = tag_pose
-            # Calculate the cube orientation and center position based on the tag's position
-            base_cube_pose[:3, 3] = tag_pose[:3, 3] + tag_pose[0:3, 0:3] @ np.array([0, 0, base_tag_size/2])
+            # Calculate the cube orientation and center position based on the tags' pose
+            base_cube_center = tag_pose[:3, 3] + tag_pose[0:3, 0:3] @ np.array([0, 0, base_tag_size/2])
             base_cube_pose[:3, :3] = tag_pose[0:3, 0:3] @ base_tags[tag_id]
-            base_cube_poses.append(base_cube_pose)
+            base_cube_centers.append(base_cube_center)
 
         # Draw tag
         (ptA, ptB, ptC, ptD) = tag.corners
@@ -206,108 +191,67 @@ while not rospy.is_shutdown():
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
             (255, 0, 0), 2)
+    
+    if len(umi_cube_centers)>0 and len(base_cube_centers)>0:
+        # Calculate the average cube center position
+        umi_cube_pose[:3, 3]  = np.mean(np.array(umi_cube_centers), axis=0)
+        base_cube_pose[:3, 3] = np.mean(np.array(base_cube_centers), axis=0)
+        # umi_ee_pose = umi_cube_pose @ transform
+        umi_ee_pose = umi_cube_pose @ umi_to_gripper
 
-    if len(ee_poses) > 0 and len(base_cube_poses) > 0:
-        umi_cube_poses = np.array(umi_cube_poses)
-        ee_poses = np.array(ee_poses)
-        base_cube_poses = np.array(base_cube_poses)
-
-        avg_umi_cam = np.mean(umi_cube_poses, axis=0)
-        avg_ee_cam = np.mean(ee_poses, axis=0)
-        avg_base_cam = np.mean(base_cube_poses, axis=0)
-
-        if avg_ee_cam.shape == (4, 4) and avg_base_cam.shape == (4, 4):
+        if umi_ee_pose.shape == (4, 4) and base_cube_pose.shape == (4, 4):
             # === Compute gripper pose relative to base ===
-            base_to_cam_inv = np.linalg.inv(avg_base_cam)
-            ee_relative_to_base = base_to_cam_inv @ avg_ee_cam
+            base_to_cam_inv = np.linalg.inv(base_cube_pose)
+            ee_relative_to_base = base_to_cam_inv @ umi_ee_pose
 
             # === Visualization ===
-            point_3d = avg_ee_cam[:3, 3]
+            point_3d = umi_ee_pose[:3, 3]
             point_2d = K @ point_3d
             pixel_coords = point_2d[:2] / point_2d[2]
-
             pixel_coordinates_list.append(pixel_coords)
             if len(pixel_coordinates_list) > 100:
                 pixel_coordinates_list.pop(0)
 
             for pt in pixel_coordinates_list:
                 cv2.circle(color_image, (int(pt[0]), int(pt[1])), 2, (0, 0, 255), -1)
-
             cv2.circle(color_image, (int(pixel_coords[0]), int(pixel_coords[1])), 5, (0, 255, 0), -1)
 
-            # === Publish base frame pose (optional) ===
-            base_pose_msg = create_pose_msg(avg_base_cam, "april_base")
+            # Publish the pose of the umi cube
+            umi_pose_msg = create_pose_msg(umi_cube_pose, "umi_cube")
+            umi_cube_pose_pub.publish(umi_pose_msg)
+            # Publish the pose of the umi ee
+            umi_pose_msg = create_pose_msg(umi_ee_pose, "umi_ee")
+            umi_ee_pose_pub.publish(umi_pose_msg)
+            # Publish the pose of the base cube
+            base_pose_msg = create_pose_msg(base_cube_pose, "april_base")
             base_pose_pub.publish(base_pose_msg)
-
-            # === Publish umi_cube frame pose (optional) ===
-            umi_cube_pose_msg = create_pose_msg(avg_umi_cam, "umi_cube")
-            umi_pose_pub.publish(umi_cube_pose_msg)
-
-            # === Publish umi_ee frame pose (optional) ===
-            umi_pose_msg = create_pose_msg(avg_ee_cam, "umi_ee")
-            umi_pose_pub.publish(umi_pose_msg)
-
-            # === Publish pose relative to base ===
-            pose_relative_msg = create_pose_msg(ee_relative_to_base, "april_base")
-            umi_pose_world_pub.publish(pose_relative_msg)  # You can use a new topic if preferred
-
-            # publish_pose_euler(ee_relative_to_base)
-
+            # Publish the pose of the umi ee relative to the base
+            umi_pose_relative_msg = create_pose_msg(ee_relative_to_base, "april_base")
+            umi_pose_world_pub.publish(umi_pose_relative_msg)
+            # Publish the pose of the camera
+            camera_pose_msg = create_pose_msg(camera_to_world, "camera")
+            camera_pose_pub.publish(camera_pose_msg)
+            
             # === Broadcast TF: "umi_cube to camera" ===
-            quat = tft.quaternion_from_matrix(avg_umi_cam)
             tf_broadcaster.sendTransform(
-                (avg_umi_cam[0, 3], avg_umi_cam[1, 3], avg_umi_cam[2, 3]),
-                quat,
-                rospy.Time.now(),
-                "umi_cube",
-                "camera"
-            )
-
-            # === Broadcast TF: "umi_ee to camera" ===
-            quat = tft.quaternion_from_matrix(avg_ee_cam)
-            tf_broadcaster.sendTransform(
-                (avg_ee_cam[0, 3], avg_ee_cam[1, 3], avg_ee_cam[2, 3]),
-                quat,
-                rospy.Time.now(),
-                "umi_ee",
-                "camera"
-            )
-
+                (umi_cube_pose[0, 3], umi_cube_pose[1, 3], umi_cube_pose[2, 3]),    #position
+                tft.quaternion_from_matrix(umi_cube_pose),                          #quaternion
+                rospy.Time.now(), "umi_cube", "camera") 
             # === Broadcast TF: "april_base to camera" ===
-            quat = tft.quaternion_from_matrix(avg_base_cam)
             tf_broadcaster.sendTransform(
-                (avg_base_cam[0, 3], avg_base_cam[1, 3], avg_base_cam[2, 3]),
-                quat,
-                rospy.Time.now(),
-                "april_base",
-                "camera"
-            )
-
-            # # === Publish pose relative to base ===
-            # # === Broadcast TF ===
-            # quat = tft.quaternion_from_matrix(ee_relative_to_base)
-            # tf_broadcaster.sendTransform(
-            #     (ee_relative_to_base[0, 3], ee_relative_to_base[1, 3], ee_relative_to_base[2, 3]),
-            #     quat,
-            #     rospy.Time.now(),
-            #     "umi_ee",
-            #     "april_base"
-            # )
-
-            # === Publish camera frame pose (optional) ===
-            camera_to_base_msg = create_pose_msg(camera_to_world, "camera")
-            camera_pose_pub.publish(camera_to_base_msg)
-
-            # === Broadcast TF: "world to camera" ===
-            quat = tft.quaternion_from_matrix(camera_to_world)
+                (base_cube_pose[0, 3], base_cube_pose[1, 3], base_cube_pose[2, 3]),    
+                tft.quaternion_from_matrix(base_cube_pose),  
+                rospy.Time.now(), "april_base", "camera")
+            # === Broadcast TF: "umi_ee to camera" ===
             tf_broadcaster.sendTransform(
-                (camera_to_world[0, 3], camera_to_world[1, 3], camera_to_world[2, 3]),
-                quat,
-                rospy.Time.now(),
-                "camera",
-                "world"
-            )
-
+                (umi_ee_pose[0, 3], umi_ee_pose[1, 3], umi_ee_pose[2, 3]),    
+                tft.quaternion_from_matrix(umi_ee_pose),  
+                rospy.Time.now(), "umi_ee", "camera")
+            # === Broadcast TF: "camera to world" ===
+            tf_broadcaster.sendTransform(
+                (camera_to_world[0, 3], camera_to_world[1, 3], camera_to_world[2, 3]),    
+                tft.quaternion_from_matrix(camera_to_world),
+                rospy.Time.now(), "camera", "world")
 
     cv2.imshow('RealSense', color_image)
     cv2.waitKey(1)
