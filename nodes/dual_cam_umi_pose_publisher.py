@@ -27,6 +27,17 @@ def create_pose_msg(matrix, frame_id):
     pose_msg.pose.orientation.w = quat[3]
     return pose_msg
 
+def calc_avg_pose(poses):
+    avg_translation = np.mean([p[:3, 3] for p in poses], axis=0)
+    # Extract rotation matrices and create a single Rotation object
+    rotation_mats = [p[:3, :3] for p in poses]
+    rotation_obj = Rotation.from_matrix(rotation_mats)
+    # Compute mean rotation using chordal L2 minimization
+    avg_rotation = rotation_obj.mean()
+    avg_pose = np.eye(4)
+    avg_pose[:3, 3] = avg_translation
+    avg_pose[:3, :3] = avg_rotation.as_matrix() #avg_rotation
+    return avg_pose
 
 umi_tag_size = 0.050
 base_tag_size = 0.040
@@ -66,19 +77,33 @@ umi_to_gripper = np.array([[1, 0, 0, 0],
 # cv2.waitKey(0)
 # cv2.destroyAllWindows()
 
-# List all connected devices
+# # Get cameras' Serial Number
 context = rs.context()
 print("Connected devices:")
 for device in context.devices:
     print(f"Device Name: {device.get_info(rs.camera_info.name)}")
     print(f"Serial Number: {device.get_info(rs.camera_info.serial_number)}")
 # Device Name: Intel RealSense D435  ######## Serial Number: 215322079295
-# Device Name: Intel RealSense D435I ######## Serial Number: 146322071247
+# Device Name: Intel RealSense D435I ######## Serial Number: 146322071247, 146322071961
+
+##############################################################################
+##############################################################################
+##############################################################################
 
 # Initialize ROS node
 rospy.init_node('dual_cam_umi_gripper_pose_publisher')
 
-# Dual camera initialization
+# Publishers
+base_pose_pub = rospy.Publisher('/base_pose_fused', PoseStamped, queue_size=10)
+umi_cube_pose_pub = rospy.Publisher('/umi_pose_fused', PoseStamped, queue_size=10)
+umi_ee_pose_pub = rospy.Publisher('/umi_ee_pose_fused', PoseStamped, queue_size=10)
+umi_pose_world_pub = rospy.Publisher('/umi_pose_base', PoseStamped, queue_size=10)
+cam1_pose_pub = rospy.Publisher('/camera1_pose', PoseStamped, queue_size=10)
+cam2_pose_pub = rospy.Publisher('/camera2_pose', PoseStamped, queue_size=10)
+
+tf_broadcaster = tf.TransformBroadcaster()
+
+# Camera initialization
 pipe1 = rs.pipeline()
 config1 = rs.config()
 config1.enable_device('215322079295')  
@@ -86,12 +111,8 @@ config1.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 60)
 
 pipe2 = rs.pipeline()
 config2 = rs.config()
-config2.enable_device('146322071247')  
+config2.enable_device('146322071961')  
 config2.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 60)
-
-# AprilTag configuration
-options = apriltag.DetectorOptions(families='tag36h11', nthreads=4)
-detector = apriltag.Detector(options)
 
 # Start pipelines
 profile1 = pipe1.start(config1)
@@ -110,16 +131,9 @@ K2 = np.array([[intr2.fx, 0, intr2.ppx],
               [0, intr2.fy, intr2.ppy],
               [0, 0, 1]])
 
-# Publishers
-umi_cube_pose_pub = rospy.Publisher('/umi_pose_fused', PoseStamped, queue_size=10)
-umi_ee_pose_pub = rospy.Publisher('/umi_ee_pose_fused', PoseStamped, queue_size=10)
-base_pose_pub = rospy.Publisher('/base_pose_fused', PoseStamped, queue_size=10)
-umi_pose_world_pub = rospy.Publisher('umi_pose_base', PoseStamped, queue_size=10)
-cam1_pose_pub = rospy.Publisher('camera1_pose', PoseStamped, queue_size=10)
-cam2_pose_pub = rospy.Publisher('camera2_pose', PoseStamped, queue_size=10)
-
-tf_broadcaster = tf.TransformBroadcaster()
-
+# AprilTag configuration
+options = apriltag.DetectorOptions(families='tag36h11', nthreads=4)
+detector = apriltag.Detector(options)
 
 def process_camera(pipe, camera_index):
     frames = pipe.wait_for_frames()
@@ -135,7 +149,7 @@ def process_camera(pipe, camera_index):
     detections = []
     for tag in detector.detect(gray_image):
         pose = detector.detection_pose(tag, (intr1.fx, intr1.fy, intr1.ppx, intr1.ppy) if camera_index == 1 
-                                      else (intr2.fx, intr2.fy, intr2.ppx, intr2.ppy), umi_tag_size, z_sign=1)[0]
+                                       else (intr2.fx, intr2.fy, intr2.ppx, intr2.ppy), umi_tag_size, z_sign=1)[0]
         detections.append({
             'id': tag.tag_id,
             'pose': pose,
@@ -161,71 +175,59 @@ def process_camera(pipe, camera_index):
         # cv2.putText(img1, str(det['id']), tuple(map(int, corner)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     return detections, color_image
 
-def calc_avg_pose(poses):
-    avg_translation = np.mean([p[:3, 3] for p in poses], axis=0)
-    # Extract rotation matrices and create a single Rotation object
-    rotation_mats = [p[:3, :3] for p in poses]
-    rotation_obj = Rotation.from_matrix(rotation_mats)
-    # Compute mean rotation using chordal L2 minimization
-    avg_rotation = rotation_obj.mean()
-    avg_pose = np.eye(4)
-    avg_pose[:3, 3] = avg_translation
-    avg_pose[:3, :3] = avg_rotation.as_matrix() #avg_rotation
-    return avg_pose
 
-def fuse_poses(detections1, detections2):
-    # Pose averaging 
-    umi_poses = []
-    base_poses = []
-    for det in detections1 + detections2:
-        print("Detected tag ID:", det['id'])
 
-        if det['id'] in umi_tags:  
-            umi_poses.append(det['pose'])
-        elif det['id'] in base_tags:
-            base_poses.append(det['pose'])
+# def fuse_poses(detections1, detections2):
+#     # Pose averaging 
+#     umi_poses = []
+#     base_poses = []
+#     for det in detections1 + detections2:
+#         print("Detected tag ID:", det['id'])
+
+#         if det['id'] in umi_tags:  
+#             umi_poses.append(det['pose'])
+#         elif det['id'] in base_tags:
+#             base_poses.append(det['pose'])
     
-    if len(umi_poses) == 0 or len(base_poses) == 0:
-        print("No valid poses found for fusion.")
-        return None
+#     if len(umi_poses) == 0 or len(base_poses) == 0:
+#         print("No valid poses found for fusion.")
+#         return None
         
-    umi_avg_translation = np.mean([p[:3, 3] for p in umi_poses], axis=0)
-    umi_avg_rotation = tft.quaternion_average([tft.quaternion_from_matrix(p) for p in umi_poses])
+#     umi_avg_translation = np.mean([p[:3, 3] for p in umi_poses], axis=0)
+#     umi_avg_rotation = tft.quaternion_average([tft.quaternion_from_matrix(p) for p in umi_poses])
     
-    umi_fused_pose = np.eye(4)
-    umi_fused_pose[:3, 3] = umi_avg_translation
-    umi_fused_pose[:3, :3] = tft.quaternion_matrix(umi_avg_rotation)[:3, :3]
+#     umi_fused_pose = np.eye(4)
+#     umi_fused_pose[:3, 3] = umi_avg_translation
+#     umi_fused_pose[:3, :3] = tft.quaternion_matrix(umi_avg_rotation)[:3, :3]
 
-    base_avg_translation = np.mean([p[:3, 3] for p in base_poses], axis=0)
-    base_avg_rotation = tft.quaternion_average([tft.quaternion_from_matrix(p) for p in base_poses])
-    base_fused_pose = np.eye(4)
-    base_fused_pose[:3, 3] = base_avg_translation
-    base_fused_pose[:3, :3] = tft.quaternion_matrix(base_avg_rotation)[:3, :3]
+#     base_avg_translation = np.mean([p[:3, 3] for p in base_poses], axis=0)
+#     base_avg_rotation = tft.quaternion_average([tft.quaternion_from_matrix(p) for p in base_poses])
+#     base_fused_pose = np.eye(4)
+#     base_fused_pose[:3, 3] = base_avg_translation
+#     base_fused_pose[:3, :3] = tft.quaternion_matrix(base_avg_rotation)[:3, :3]
 
-    return umi_fused_pose, base_fused_pose
+#     return umi_fused_pose, base_fused_pose
 
 pixel_coordinates_list_1 = []
 pixel_coordinates_list_2 = []
 
+base_cube_pose_1 = np.eye(4)
+base_cube_pose_2 = np.eye(4)
+
 while not rospy.is_shutdown():
 
-    detections1, img1 = process_camera(pipe1, 1)    # Process Camera 1
-    detections2, img2 = process_camera(pipe2, 2)    # Process Camera 2
-    if img1 is None:
-        rospy.logerr_throttle(3.0, "Camera 1: No image captured.")
-    if img2 is None:
-        rospy.logerr_throttle(3.0, "Camera 2: No image captured.")
+    detections1, img1 = process_camera(pipe1, 1)    
+    detections2, img2 = process_camera(pipe2, 2)    
 
     umi_poses_1 = []
     base_poses_1 = []
     umi_poses_2 = []
     base_poses_2 = []
-    base_cube_pose_1 = np.eye(4)
-    base_cube_pose_2 = np.eye(4)
-
+    
     for det in detections1 + detections2:
         rospy.loginfo_throttle(1.0, f"Detected tag ID: {det['id']}")
-    
+    # rospy.loginfo_throttle(1.0, f"Detected tag IDs: {[det['id'] for det in detections1 + detections2]}")
+
     # Calculate average pose for umi and base tags wrt camera_1
     for det in detections1:
         if det['id'] in umi_tags:  
@@ -243,18 +245,6 @@ while not rospy.is_shutdown():
 
         # # umi_cube_pose_1 = calc_avg_pose(umi_poses_1)
         # # base_cube_pose_1 = calc_avg_pose(base_poses_1)
-
-        # # umi_avg_translation_1 = np.mean([p[:3, 3] for p in umi_poses_1], axis=0)
-        # # umi_avg_rotation_1 = tft.quaternion_average([tft.quaternion_from_matrix(p) for p in umi_poses_1])
-        # # umi_cube_pose_1 = np.eye(4)
-        # # umi_cube_pose_1[:3, 3] = umi_avg_translation_1
-        # # umi_cube_pose_1[:3, :3] = tft.quaternion_matrix(umi_avg_rotation_1)[:3, :3]
-
-        # # base_avg_translation_1 = np.mean([p[:3, 3] for p in base_poses_1], axis=0)
-        # # base_avg_rotation_1 = tft.quaternion_average([tft.quaternion_from_matrix(p) for p in base_poses_1])
-        # # base_cube_pose_1 = np.eye(4)
-        # # base_cube_pose_1[:3, 3] = base_avg_translation_1
-        # # base_cube_pose_1[:3, :3] = tft.quaternion_matrix(base_avg_rotation_1)[:3, :3]
 
         # # if len(umi_cube_pose_1) > 0 and len(base_cube_pose_1) > 0:
         # if len(umi_poses_1) > 0 and len(base_poses_1) > 0:
@@ -300,25 +290,36 @@ while not rospy.is_shutdown():
         #     umi_cube_wrt_base_2 = np.linalg.inv(base_cube_pose_2) @ umi_cube_pose_2
         #     # umi_ee_wrt_base_2 = umi_cube_wrt_base_2 @ umi_to_gripper
 
-    # Fusion of poses from both cameras
-    if len(base_poses_1) == 0 or len(base_poses_2) == 0:
-        rospy.logerr_throttle(3.0, "BASE not found by cameras")
-        continue
-    else:
+    
+    # if len(base_poses_1) == 0 or len(base_poses_2) == 0:
+    #     rospy.logerr_throttle(3.0, "BASE not found by cameras")
+    #     # rospy.logwarn_throttle(5.0, "BASE not found by camera 1. Using last updated pose values.")
+    #     continue
+    # else:
+    #     base_cube_pose_1 = calc_avg_pose(base_poses_1)
+    #     base_cube_pose_2 = calc_avg_pose(base_poses_2)
+    #     camera1_to_base = np.linalg.inv(base_cube_pose_1) 
+    #     camera2_to_base = np.linalg.inv(base_cube_pose_2)
+
+    if len(base_poses_1) > 0:
         base_cube_pose_1 = calc_avg_pose(base_poses_1)
+    if len(base_poses_2) > 0:
         base_cube_pose_2 = calc_avg_pose(base_poses_2)
-        camera1_to_base = np.linalg.inv(base_cube_pose_1) 
-        camera2_to_base = np.linalg.inv(base_cube_pose_2)
 
     if len(umi_poses_1) > 0:
         umi_cube_pose_1 = calc_avg_pose(umi_poses_1)
-        umi_cube_wrt_base_1 = np.linalg.inv(base_cube_pose_1) @ umi_cube_pose_1
     if len(umi_poses_2) > 0:
         umi_cube_pose_2 = calc_avg_pose(umi_poses_2)
-        umi_cube_wrt_base_2 = np.linalg.inv(base_cube_pose_2) @ umi_cube_pose_2
 
+    camera1_to_base = np.linalg.inv(base_cube_pose_1) 
+    camera2_to_base = np.linalg.inv(base_cube_pose_2)
+
+    umi_cube_wrt_base_1 = np.linalg.inv(base_cube_pose_1) @ umi_cube_pose_1
+    umi_cube_wrt_base_2 = np.linalg.inv(base_cube_pose_2) @ umi_cube_pose_2
+
+    # Fusion of poses from both cameras
     if len(umi_poses_1) == 0 and len(umi_poses_2) == 0:
-        rospy.logwarn_throttle(3.0, "No valid UMI poses found. Waiting...")
+        rospy.logwarn_throttle(3.0, "No valid UMI pose found. Waiting...")
         continue
     elif len(umi_poses_1) == 0 and len(umi_poses_2) > 0:
         umi_cube_pose = umi_cube_wrt_base_2
@@ -329,10 +330,9 @@ while not rospy.is_shutdown():
 
     umi_ee_pose = umi_cube_pose @ umi_to_gripper
 
-    
-    # Publish the pose of the base cube
-    base_pose_msg = create_pose_msg(base_cube_pose_1, "april_base")
-    base_pose_pub.publish(base_pose_msg)
+    # # Publish the pose of the base cube
+    # base_pose_msg = create_pose_msg(base_cube_pose_1, "april_base")
+    # base_pose_pub.publish(base_pose_msg)
     # Publish the pose of the umi cube
     umi_pose_msg = create_pose_msg(umi_cube_pose, "umi_cube")
     umi_cube_pose_pub.publish(umi_pose_msg)
@@ -344,7 +344,6 @@ while not rospy.is_shutdown():
     cam1_pose_pub.publish(cam1_pose_msg)
     cam2_pose_msg = create_pose_msg(camera2_to_base, "cam2")
     cam2_pose_pub.publish(cam2_pose_msg)
-
 
     # Publish the TF transforms
     tf_broadcaster.sendTransform(
