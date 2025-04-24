@@ -176,38 +176,6 @@ def process_camera(pipe, camera_index):
     return detections, color_image
 
 
-
-# def fuse_poses(detections1, detections2):
-#     # Pose averaging 
-#     umi_poses = []
-#     base_poses = []
-#     for det in detections1 + detections2:
-#         print("Detected tag ID:", det['id'])
-
-#         if det['id'] in umi_tags:  
-#             umi_poses.append(det['pose'])
-#         elif det['id'] in base_tags:
-#             base_poses.append(det['pose'])
-    
-#     if len(umi_poses) == 0 or len(base_poses) == 0:
-#         print("No valid poses found for fusion.")
-#         return None
-        
-#     umi_avg_translation = np.mean([p[:3, 3] for p in umi_poses], axis=0)
-#     umi_avg_rotation = tft.quaternion_average([tft.quaternion_from_matrix(p) for p in umi_poses])
-    
-#     umi_fused_pose = np.eye(4)
-#     umi_fused_pose[:3, 3] = umi_avg_translation
-#     umi_fused_pose[:3, :3] = tft.quaternion_matrix(umi_avg_rotation)[:3, :3]
-
-#     base_avg_translation = np.mean([p[:3, 3] for p in base_poses], axis=0)
-#     base_avg_rotation = tft.quaternion_average([tft.quaternion_from_matrix(p) for p in base_poses])
-#     base_fused_pose = np.eye(4)
-#     base_fused_pose[:3, 3] = base_avg_translation
-#     base_fused_pose[:3, :3] = tft.quaternion_matrix(base_avg_rotation)[:3, :3]
-
-#     return umi_fused_pose, base_fused_pose
-
 pixel_coordinates_list_1 = []
 pixel_coordinates_list_2 = []
 
@@ -224,9 +192,8 @@ while not rospy.is_shutdown():
     umi_poses_2 = []
     base_poses_2 = []
     
-    for det in detections1 + detections2:
-        rospy.loginfo_throttle(1.0, f"Detected tag ID: {det['id']}")
-    # rospy.loginfo_throttle(1.0, f"Detected tag IDs: {[det['id'] for det in detections1 + detections2]}")
+    rospy.loginfo_throttle(1.0, f"CAM1 Detected tag IDs: {[det['id'] for det in detections1]}")
+    rospy.loginfo_throttle(1.0, f"CAM2 Detected tag IDs: {[det['id'] for det in detections2]}")
 
     # Calculate average pose for umi and base tags wrt camera_1
     for det in detections1:
@@ -243,16 +210,6 @@ while not rospy.is_shutdown():
             cube_pose[0:3, 0:3] = tag_pose[0:3, 0:3] @ base_tags[det['id']]
             base_poses_1.append(det['pose'])
 
-        # # umi_cube_pose_1 = calc_avg_pose(umi_poses_1)
-        # # base_cube_pose_1 = calc_avg_pose(base_poses_1)
-
-        # # if len(umi_cube_pose_1) > 0 and len(base_cube_pose_1) > 0:
-        # if len(umi_poses_1) > 0 and len(base_poses_1) > 0:
-        #     umi_cube_pose_1 = calc_avg_pose(umi_poses_1)
-        #     base_cube_pose_1 = calc_avg_pose(base_poses_1)
-        #     umi_cube_wrt_base_1 = np.linalg.inv(base_cube_pose_1) @ umi_cube_pose_1
-        #     # umi_ee_wrt_base_1 = umi_cube_wrt_base_1 @ umi_to_gripper
-            
     # Calculate average pose for umi and base tags wrt camera_2
     for det in detections2:
         if det['id'] in umi_tags:
@@ -267,39 +224,6 @@ while not rospy.is_shutdown():
             cube_pose[0:3, 3] = tag_pose[:3, 3] + tag_pose[0:3, 0:3] @ np.array([0, 0, base_tag_size/2])
             cube_pose[0:3, 0:3] = tag_pose[0:3, 0:3] @ base_tags[det['id']]
             base_poses_2.append(det['pose'])
-        
-        # # umi_cube_pose_2 = calc_avg_pose(umi_poses_2)
-        # # base_cube_pose_2 = calc_avg_pose(base_poses_2)
-
-        # # umi_avg_translation_2 = np.mean([p[:3, 3] for p in umi_poses_2], axis=0)
-        # # umi_avg_rotation_2 = tft.quaternion_average([tft.quaternion_from_matrix(p) for p in umi_poses_2])
-        # # umi_cube_pose_2 = np.eye(4)
-        # # umi_cube_pose_2[:3, 3] = umi_avg_translation_2
-        # # umi_cube_pose_2[:3, :3] = tft.quaternion_matrix(umi_avg_rotation_2)[:3, :3]
-        
-        # # base_avg_translation_2 = np.mean([p[:3, 3] for p in base_poses_2], axis=0)
-        # # base_avg_rotation_2 = tft.quaternion_average([tft.quaternion_from_matrix(p) for p in base_poses_2])
-        # # base_cube_pose_2 = np.eye(4)
-        # # base_cube_pose_2[:3, 3] = base_avg_translation_2
-        # # base_cube_pose_2[:3, :3] = tft.quaternion_matrix(base_avg_rotation_2)[:3, :3]
-        
-        # # if len(umi_cube_pose_2) > 0 and len(base_cube_pose_2) > 0:
-        # if len(umi_poses_2) > 0 and len(base_poses_2) > 0:
-        #     umi_cube_pose_2 = calc_avg_pose(umi_poses_2)
-        #     base_cube_pose_2 = calc_avg_pose(base_poses_2)
-        #     umi_cube_wrt_base_2 = np.linalg.inv(base_cube_pose_2) @ umi_cube_pose_2
-        #     # umi_ee_wrt_base_2 = umi_cube_wrt_base_2 @ umi_to_gripper
-
-    
-    # if len(base_poses_1) == 0 or len(base_poses_2) == 0:
-    #     rospy.logerr_throttle(3.0, "BASE not found by cameras")
-    #     # rospy.logwarn_throttle(5.0, "BASE not found by camera 1. Using last updated pose values.")
-    #     continue
-    # else:
-    #     base_cube_pose_1 = calc_avg_pose(base_poses_1)
-    #     base_cube_pose_2 = calc_avg_pose(base_poses_2)
-    #     camera1_to_base = np.linalg.inv(base_cube_pose_1) 
-    #     camera2_to_base = np.linalg.inv(base_cube_pose_2)
 
     if len(base_poses_1) > 0:
         base_cube_pose_1 = calc_avg_pose(base_poses_1)
@@ -320,7 +244,6 @@ while not rospy.is_shutdown():
     # Fusion of poses from both cameras
     if len(umi_poses_1) == 0 and len(umi_poses_2) == 0:
         rospy.logwarn_throttle(3.0, "No valid UMI pose found. Waiting...")
-        continue
     elif len(umi_poses_1) == 0 and len(umi_poses_2) > 0:
         umi_cube_pose = umi_cube_wrt_base_2
     elif len(umi_poses_1) > 0 and len(umi_poses_2) == 0:
@@ -328,7 +251,8 @@ while not rospy.is_shutdown():
     else:
         umi_cube_pose = calc_avg_pose([umi_cube_wrt_base_1, umi_cube_wrt_base_2])
 
-    umi_ee_pose = umi_cube_pose @ umi_to_gripper
+    if umi_cube_pose is not None:
+        umi_ee_pose = umi_cube_pose @ umi_to_gripper
 
     # # Publish the pose of the base cube
     # base_pose_msg = create_pose_msg(base_cube_pose_1, "april_base")
@@ -364,7 +288,6 @@ while not rospy.is_shutdown():
         rospy.Time.now(), "umi_ee", "april_base")
 
 
-    
     # Display camera feeds
     cv2.imshow('Camera 1', img1)
     cv2.imshow('Camera 2', img2)
@@ -389,7 +312,6 @@ while not rospy.is_shutdown():
     # for pt in pixel_coordinates_list_2:
     #     cv2.circle(img2, tuple(map(int, pt)), 5, (255, 0, 0), -1)
     # cv2.circle(img2, tuple(map(int, pixel_coords_2)), 5, (255, 0, 0), -1)
-
 
 # Cleanup
 pipe1.stop()
