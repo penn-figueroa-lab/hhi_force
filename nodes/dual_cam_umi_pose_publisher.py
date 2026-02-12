@@ -217,10 +217,21 @@ obj_OPF_base = OPF_3d(num_particles= 1000, name = "base_block")
 
 
 while not rospy.is_shutdown():
-
+    # Read frames from cameras
     detections1, img1 = process_camera(pipe1, 1)
     detections2, img2 = process_camera(pipe2, 2)
 
+    # Guard against missing frames
+    if detections1 is None:
+        detections1 = []
+    if detections2 is None:
+        detections2 = []
+    if img1 is None:
+        img1 = np.zeros((480, 640, 3), dtype=np.uint8)
+    if img2 is None:
+        img2 = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    # Per-camera storage
     base_poses_1, base_poses_2 = [], []
     umi_poses_1, umi_poses_2 = [], []
     base_measurements, valid_measurements = [], []
@@ -244,26 +255,28 @@ while not rospy.is_shutdown():
 
         T_corrected = pose @ T_adj
 
-        quat = np.roll(t3d.quaternions.mat2quat(T_corrected[:3, :3]), -1)
-        measurement = {'value': np.hstack((T_corrected[:3, 3], quat)), 'weight': 1.0}
+        # transforms3d returns quat as (w, x, y, z); shift to (x,y,z,w) if needed by OPF
+        quat_wxyz = t3d.quaternions.mat2quat(T_corrected[:3, :3])
+        quat_xyzw = np.roll(quat_wxyz, -1)
+        measurement = {'value': np.hstack((T_corrected[:3, 3], quat_xyzw)), 'weight': 1.0}
         base_pose_storage.append(T_corrected)
         return measurement
 
-    # ─── Camera 1 detections ─────────────────────────
+    # Camera 1 detections
     for det in detections1:
         if det['id'] in base_tags:
             base_measurements.append(process_detection(det, base_poses_1, is_base=True))
         elif det['id'] in umi_tags:
             valid_measurements.append(process_detection(det, umi_poses_1, is_base=False))
 
-    # ─── Camera 2 detections ─────────────────────────
+    # Camera 2 detections
     for det in detections2:
         if det['id'] in base_tags:
             base_measurements.append(process_detection(det, base_poses_2, is_base=True))
         elif det['id'] in umi_tags:
             valid_measurements.append(process_detection(det, umi_poses_2, is_base=False))
 
-    # ─── BASE OPF FILTER ─────────────────────────────
+    # BASE OPF FILTER
     if base_measurements:
         obj_OPF_base.predict()
         obj_OPF_base.update_all(base_measurements)
@@ -294,7 +307,7 @@ while not rospy.is_shutdown():
     else:
         camera2_to_base = np.linalg.inv(last_known_base_pose_2)
 
-    # ─── UMI OPF FILTER ───────────────────────────────
+    # UMI OPF FILTER
     if valid_measurements:
         obj_OPF.predict()
         obj_OPF.update_all(valid_measurements)
@@ -303,7 +316,7 @@ while not rospy.is_shutdown():
     else:
         obj_OPF.predict()
 
-    # ─── EXTRACT POSES ────────────────────────────────
+    # Extract UMI pose from OPF
     Tg = np.eye(4)
     Tg[:3, 3] = obj_OPF.curr_pos
     qg = obj_OPF.curr_pos1
@@ -313,7 +326,7 @@ while not rospy.is_shutdown():
     umi_cube_pose = Tg
     umi_ee_pose = umi_cube_pose @ umi_to_gripper
 
-    # ─── TF + POSE PUBS ───────────────────────────────
+    # TF + POSE PUBS
     tf_broadcaster.sendTransform(
         tuple(umi_cube_pose[:3, 3]),
         tft.quaternion_from_matrix(umi_cube_pose),
@@ -334,11 +347,10 @@ while not rospy.is_shutdown():
         tft.quaternion_from_matrix(camera2_to_base),
         rospy.Time.now(), "cam2", "april_base")
 
-    # ─── Visual Feedback ──────────────────────────────
+    # Display camera feeds
     cv2.imshow('Camera 1', img1)
     cv2.imshow('Camera 2', img2)
     cv2.waitKey(1)
-
 # Cleanup
 pipe1.stop()
 pipe2.stop()
