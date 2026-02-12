@@ -12,7 +12,16 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import transforms3d as t3d
 from OPF_quat2 import OPF_3d
+from scipy.spatial.transform import Rotation as R, Slerp
+import rospkg
 
+
+
+### Using the original pose publisher code but with inclusion of opf filter
+# Load tag-to-gripper transform from NPZ
+rospack = rospkg.RosPack()
+pkg_path = rospack.get_path('hhi_force')
+tag_to_gripper = np.load(pkg_path + "/nodes/calibrated_transforms.npz") 
 
 def create_pose_msg(matrix, frame_id):
     pose_msg = PoseStamped()
@@ -28,42 +37,45 @@ def create_pose_msg(matrix, frame_id):
     pose_msg.pose.orientation.w = quat[3]
     return pose_msg
 
-def visualize_opf_particles(opf_obj):
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+# def visualize_opf_particles(opf_obj):
+#     fig = plt.figure()
+#     ax = fig.add_subplot(111, projection='3d')
 
-    # Plot particles
-    particles = opf_obj.particles
-    ax.scatter(particles[:, 0], particles[:, 1], particles[:, 2], c='blue', s=1, label='Particles')
+#     # Plot particles
+#     particles = opf_obj.particles
+#     ax.scatter(particles[:, 0], particles[:, 1], particles[:, 2], c='blue', s=1, label='Particles')
 
-    # Plot filtered position
-    filtered_pos = opf_obj.curr_pos
-    ax.scatter(filtered_pos[0], filtered_pos[1], filtered_pos[2], c='red', s=50, label='Filtered Pose')
+#     # Plot filtered position
+#     filtered_pos = opf_obj.curr_pos
+#     ax.scatter(filtered_pos[0], filtered_pos[1], filtered_pos[2], c='red', s=50, label='Filtered Pose')
 
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_title('OPF Particle Filter Visualization')
-    ax.legend()
-    plt.show(block=False)
-    plt.pause(0.01)
-    plt.close(fig)
-plt.ion()
-fig = plt.figure(figsize=(8,8))
-ax = fig.add_subplot(111,projection='3d')
+#     ax.set_xlabel('X')
+#     ax.set_ylabel('Y')
+#     ax.set_zlabel('Z')
+#     ax.set_title('OPF Particle Filter Visualization')
+#     ax.legend()
+#     plt.show(block=False)
+#     plt.pause(0.01)
+#     plt.close(fig)
+# plt.ion()
+# fig = plt.figure(figsize=(8,8))
+# ax = fig.add_subplot(111,projection='3d')
 
 
-# def calc_avg_pose(poses):
-#     avg_translation = np.mean([p[:3, 3] for p in poses], axis=0)
-#     # Extract rotation matrices and create a single Rotation object
-#     rotation_mats = [p[:3, :3] for p in poses]
-#     rotation_obj = Rotation.from_matrix(rotation_mats)
-#     # Compute mean rotation using chordal L2 minimization
-#     avg_rotation = rotation_obj.mean()
-#     avg_pose = np.eye(4)
-#     avg_pose[:3, 3] = avg_translation
-#     avg_pose[:3, :3] = avg_rotation.as_matrix() #avg_rotation
-#     return avg_pose
+def average_pose(pose_list):
+    if not pose_list:
+        return None
+    positions = [pose[:3, 3] for pose in pose_list]
+    avg_pos = np.mean(positions, axis=0)
+
+    rotations = R.from_matrix([pose[:3, :3] for pose in pose_list])
+    mean_rot = rotations.mean()
+    avg_rot = mean_rot.as_matrix()
+
+    T_avg = np.eye(4)
+    T_avg[:3, 3] = avg_pos
+    T_avg[:3, :3] = avg_rot
+    return T_avg
 
 umi_tag_size = 0.050
 base_tag_size = 0.040
@@ -93,12 +105,52 @@ base_to_world = np.array([ [1, 0, 0, 1],
                            [0, 0, 1, 1],
                            [0, 0, 0, 1]])
 
-umi_to_gripper = np.array([[1, 0, 0, 0],
-                           [0, 1, 0, umi_tag_size/2+0.025],
-                           [0, 0, 1, 0.26],
-                           [0, 0, 0, 1]])
+# umi_to_gripper = np.array([[1, 0, 0, 0],
+#                            [0, 1, 0, umi_tag_size/2+0.025],
+#                            [0, 0, 1, 0.26],
+#                            [0, 0, 0, 1]])
 
-# blank_image = np.zeros((480, 640, 3), dtype=np.uint8)
+
+umi_to_gripper_by_tag = {
+    579: np.array([  # BACK tag, +Z face → gripper is -Z from it
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0.26 + umi_tag_size],  # Z forward from +Z face
+        [0, 0, 0, 1]
+    ]),
+    580: np.array([  # LEFT tag, -X face
+        [1, 0, 0, -umi_tag_size],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0.26],
+        [0, 0, 0, 1]
+    ]),
+    581: np.array([  # TOP tag, +Y face
+        [1, 0, 0, 0],
+        [0, 1, 0, umi_tag_size],
+        [0, 0, 1, 0.26],
+        [0, 0, 0, 1]
+    ]),
+    582: np.array([  # RIGHT tag, +X face
+        [1, 0, 0, umi_tag_size],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0.26],
+        [0, 0, 0, 1]
+    ])
+}
+
+# umi_to_gripper_579 = np.array([
+#         [1, 0, 0, 0],
+#         [0, 1, 0, umi_tag_size/2 + 0.025],
+#         [0, 0, 1, 0.26 + umi_tag_size],  # extra depth for back face
+#         [0, 0, 0, 1]
+#     ])
+# umi_to_gripper = np.array([
+#         [1, 0, 0, 0],
+#         [0, 1, 0, umi_tag_size/2 + 0.025],
+#         [0, 0, 1, 0.26],
+#         [0, 0, 0, 1]
+#     ])
+# # blank_image = np.zeros((480, 640, 3), dtype=np.uint8)
 # cv2.imshow('Test Window', blank_image)
 # cv2.waitKey(0)
 # cv2.destroyAllWindows()
@@ -202,6 +254,22 @@ def process_camera(pipe, camera_index):
     return detections, color_image
 
 
+def smooth_pose(prev_pose, new_pose, alpha=0.2):
+    """Smooth a pose using linear interpolation for position and SLERP for rotation."""
+    smoothed = np.eye(4)
+
+    # --- Translation: linear interpolation ---
+    smoothed[:3, 3] = (1 - alpha) * prev_pose[:3, 3] + alpha * new_pose[:3, 3]
+
+    # --- Rotation: spherical interpolation ---
+    times = [0, 1]
+    key_rots = R.from_matrix([prev_pose[:3, :3], new_pose[:3, :3]])
+    slerp = Slerp(times, key_rots)
+    interpolated_rot = slerp(alpha)
+    smoothed[:3, :3] = interpolated_rot.as_matrix()
+
+    return smoothed
+
 pixel_coordinates_list_1 = []
 pixel_coordinates_list_2 = []
 
@@ -224,75 +292,150 @@ while not rospy.is_shutdown():
     base_poses_1, base_poses_2 = [], []
     umi_poses_1, umi_poses_2 = [], []
     base_measurements, valid_measurements = [], []
+    umi_origin_poses_1, umi_origin_poses_2 = [], []
+
 
     rospy.loginfo_throttle(1.0, f"CAM1 Detected tag IDs: {[det['id'] for det in detections1]}")
     rospy.loginfo_throttle(1.0, f"CAM2 Detected tag IDs: {[det['id'] for det in detections2]}")
 
-    def process_detection(det, base_pose_storage, is_base=True):
+    def process_base_detection(det, base_pose_storage, is_base=True):
         tag_id = det['id']
         pose = det['pose']
-        if is_base:
-            rot = base_tags[tag_id]
-            size = base_tag_size
-        else:
-            rot = umi_tags[tag_id]
-            size = umi_tag_size
-
+        rot = base_tags[tag_id]
+        size = base_tag_size
         T_adj = np.eye(4)
         T_adj[:3, :3] = rot
-        T_adj[:3, 3] = [0, 0, size/2]
-
+        T_adj[:3, 3] = [0, 0, size / 2]
         T_corrected = pose @ T_adj
-
         quat = np.roll(t3d.quaternions.mat2quat(T_corrected[:3, :3]), -1)
         measurement = {'value': np.hstack((T_corrected[:3, 3], quat)), 'weight': 1.0}
         base_pose_storage.append(T_corrected)
         return measurement
+   
+    # def compute_gripper_pose(det):
+    #     tag_id = det['id']
+    #     pose = det['pose']
+    #     try:
+    #         T_tag_to_finger = tag_to_gripper[f'from_{tag_id}']  # 4x4 transform
+    #     except KeyError:
+    #         rospy.logwarn(f"No calibrated transform for tag {tag_id}")
+    #         return None
+    #     return pose @ T_tag_to_finger  
+    def compute_gripper_pose(det):
+        tag_id = det['id']
+        pose = det['pose']
 
-    # ─── Camera 1 detections ─────────────────────────
+        # Tag-to-cube transform (rotation defined in umi_tags)
+        rot = umi_tags[tag_id]
+        T_tag_to_cube = np.eye(4)
+        T_tag_to_cube[:3, :3] = rot
+        T_tag_to_cube[:3, 3] = [0, 0, umi_tag_size / 2]  # move from tag center to face cube centre
+
+        T_cube = pose @ T_tag_to_cube
+
+        T_cube_to_finger = umi_to_gripper_by_tag.get(tag_id)
+        if T_cube_to_finger is None:
+            rospy.logwarn(f"No transform to gripper defined for tag {tag_id}")
+            return None
+
+        return T_cube @ T_cube_to_finger
+
+    # # Camera 1 detections
+    # for det in detections1:
+    #     if det['id'] in umi_tags:
+    #         Tg = compute_gripper_pose(det)
+    #         if Tg is not None:
+    #             umi_origin_poses_1.append(Tg)
+    #     elif det['id'] in base_tags:
+    #         base_measurements.append(process_base_detection(det, base_poses_1))
+
+
+    #     # Camera 2 detections
+    # for det in detections2:
+    #     if det['id'] in umi_tags:
+    #         Tg = compute_gripper_pose(det)
+    #         if Tg is not None:
+    #             umi_origin_poses_2.append(Tg)
+    #     elif det['id'] in base_tags:
+    #         base_measurements.append(process_base_detection(det, base_poses_2))
+# 1. Process base detections
     for det in detections1:
         if det['id'] in base_tags:
-            base_measurements.append(process_detection(det, base_poses_1, is_base=True))
-        elif det['id'] in umi_tags:
-            valid_measurements.append(process_detection(det, umi_poses_1, is_base=False))
-
-    # ─── Camera 2 detections ─────────────────────────
+            base_measurements.append(process_base_detection(det, base_poses_1))
     for det in detections2:
         if det['id'] in base_tags:
-            base_measurements.append(process_detection(det, base_poses_2, is_base=True))
-        elif det['id'] in umi_tags:
-            valid_measurements.append(process_detection(det, umi_poses_2, is_base=False))
+            base_measurements.append(process_base_detection(det, base_poses_2))
 
-    # ─── BASE OPF FILTER ─────────────────────────────
-    if base_measurements:
-        obj_OPF_base.predict()
-        obj_OPF_base.update_all(base_measurements)
-        obj_OPF_base.systematic_resample()
-        obj_OPF_base.resample_from_index()
-
-        T_base_filtered = np.eye(4)
-        T_base_filtered[:3, 3] = obj_OPF_base.curr_pos
-        qb = obj_OPF_base.curr_pos1
-        quat_wxyz = [qb[3], qb[0], qb[1], qb[2]]
-        T_base_filtered[:3, :3] = t3d.quaternions.quat2mat(quat_wxyz)
-    else:
-        obj_OPF_base.predict()
-        T_base_filtered = last_known_base_pose_1  # fallback
-
-    # Camera-to-base frames
+    # 2. Smooth and update base cube poses
     if base_poses_1:
         observed1 = base_poses_1[0]
-        camera1_to_base = np.linalg.inv(observed1) @ T_base_filtered
-        last_known_base_pose_1 = np.linalg.inv(camera1_to_base)
+        base_cube_pose_1 = smooth_pose(last_known_base_pose_1, observed1, alpha=0.2)
+        last_known_base_pose_1 = base_cube_pose_1.copy()
     else:
-        camera1_to_base = np.linalg.inv(last_known_base_pose_1)
+        base_cube_pose_1 = last_known_base_pose_1.copy()
 
     if base_poses_2:
         observed2 = base_poses_2[0]
-        camera2_to_base = np.linalg.inv(observed2) @ T_base_filtered
-        last_known_base_pose_2 = np.linalg.inv(camera2_to_base)
+        base_cube_pose_2 = smooth_pose(last_known_base_pose_2, observed2, alpha=0.2)
+        last_known_base_pose_2 = base_cube_pose_2.copy()
     else:
-        camera2_to_base = np.linalg.inv(last_known_base_pose_2)
+        base_cube_pose_2 = last_known_base_pose_2.copy()
+
+    # 3. Compute camera-to-base transforms
+    camera1_to_base = np.linalg.inv(base_cube_pose_1)
+    camera2_to_base = np.linalg.inv(base_cube_pose_2)
+
+    # 4. Now safely use camera-to-base to convert gripper detections
+    for det in detections1:
+        if det['id'] in umi_tags:
+            Tg_cam = compute_gripper_pose(det)
+            if Tg_cam is not None:
+                Tg_base = camera1_to_base @ Tg_cam
+                umi_origin_poses_1.append(Tg_base)
+
+    for det in detections2:
+        if det['id'] in umi_tags:
+            Tg_cam = compute_gripper_pose(det)
+            if Tg_cam is not None:
+                Tg_base = camera2_to_base @ Tg_cam
+                umi_origin_poses_2.append(Tg_base)
+
+    # 5. Add measurements
+    for Tg in umi_origin_poses_1 + umi_origin_poses_2:
+        quat = np.roll(t3d.quaternions.mat2quat(Tg[:3, :3]), -1)
+        valid_measurements.append({'value': np.hstack((Tg[:3, 3], quat)), 'weight': 1.0})
+    # # Average gripper origin poses from each camera
+    # T_avg_1 = average_pose(umi_origin_poses_1)
+    # T_avg_2 = average_pose(umi_origin_poses_2)
+
+    # if T_avg_1 is not None:
+    #     quat1 = np.roll(t3d.quaternions.mat2quat(T_avg_1[:3, :3]), -1)
+    #     valid_measurements.append({'value': np.hstack((T_avg_1[:3, 3], quat1)), 'weight': 1.0})
+
+    # if T_avg_2 is not None:
+    #     quat2 = np.roll(t3d.quaternions.mat2quat(T_avg_2[:3, :3]), -1)
+    #     valid_measurements.append({'value': np.hstack((T_avg_2[:3, 3], quat2)), 'weight': 1.0})
+
+    # if base_poses_1:
+    #     observed1 = base_poses_1[0]
+    #     base_cube_pose_1 = smooth_pose(last_known_base_pose_1, observed1, alpha=0.2)
+    #     last_known_base_pose_1 = base_cube_pose_1.copy()
+    # else:
+    #     base_cube_pose_1 = last_known_base_pose_1.copy()
+
+    # if base_poses_2:
+    #     observed2 = base_poses_2[0]
+    #     base_cube_pose_2 = smooth_pose(last_known_base_pose_2, observed2, alpha=0.2)
+    #     last_known_base_pose_2 = base_cube_pose_2.copy()
+    # else:
+    #     base_cube_pose_2 = last_known_base_pose_2.copy()
+
+    # # Compute camera-to-base transforms
+    # camera1_to_base = np.linalg.inv(base_cube_pose_1)
+    # camera2_to_base = np.linalg.inv(base_cube_pose_2)
+
+
+
 
     # ─── UMI OPF FILTER ───────────────────────────────
     if valid_measurements:
@@ -310,14 +453,14 @@ while not rospy.is_shutdown():
     quat_wxyz_g = [qg[3], qg[0], qg[1], qg[2]]
     Tg[:3, :3] = t3d.quaternions.quat2mat(quat_wxyz_g)
 
-    umi_cube_pose = Tg
-    umi_ee_pose = umi_cube_pose @ umi_to_gripper
+    # umi_cube_pose = Tg
+    umi_ee_pose = Tg
 
     # ─── TF + POSE PUBS ───────────────────────────────
-    tf_broadcaster.sendTransform(
-        tuple(umi_cube_pose[:3, 3]),
-        tft.quaternion_from_matrix(umi_cube_pose),
-        rospy.Time.now(), "umi_cube", "april_base")
+    # tf_broadcaster.sendTransform(
+    #     tuple(umi_cube_pose[:3, 3]),
+    #     tft.quaternion_from_matrix(umi_cube_pose),
+    #     rospy.Time.now(), "umi_cube", "april_base")
 
     tf_broadcaster.sendTransform(
         tuple(umi_ee_pose[:3, 3]),
@@ -333,12 +476,41 @@ while not rospy.is_shutdown():
         tuple(camera2_to_base[:3, 3]),
         tft.quaternion_from_matrix(camera2_to_base),
         rospy.Time.now(), "cam2", "april_base")
+    
+    umi_pose_msg = create_pose_msg(umi_ee_pose, "umi_ee")
+    umi_ee_pose_pub.publish(umi_pose_msg)
+
+    camera1_to_base_msg = create_pose_msg(camera1_to_base, "cam1")
+    cam1_pose_pub.publish(camera1_to_base_msg)
+    
+    camera2_to_base_msg = create_pose_msg(camera2_to_base, "cam2")
+    cam2_pose_pub.publish(camera2_to_base_msg)
+
 
     # ─── Visual Feedback ──────────────────────────────
     cv2.imshow('Camera 1', img1)
     cv2.imshow('Camera 2', img2)
     cv2.waitKey(1)
-
+    
+# # Plotting
+#     ax.clear()
+#     particles = obj_OPF.particles
+#     assert all(len(t) == 7 for t in obj_OPF.trajectory), "Trajectory entries must be length 7"
+#     trajectory = np.array(obj_OPF.trajectory)
+#     # Plot particles
+#     ax.scatter(particles[:, 0], particles[:, 1], particles[:, 2], c='blue', s=1, label='Particles')
+#     # Plot estimated pose
+#     ax.scatter(obj_OPF.curr_pos[0], obj_OPF.curr_pos[1], obj_OPF.curr_pos[2], c='red', s=50, label='Estimated Pose')
+#     # Plot trajectory
+#     ax.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], c='green', label='Trajectory')
+#     ax.set_xlabel('X')
+#     ax.set_ylabel('Y')
+#     ax.set_zlabel('Z')
+#     ax.set_title('OPF Particle Visualization')
+#     ax.legend()
+#     plt.draw()
+#     plt.pause(0.01)  # pause to update the figure
+#     fig.canvas.flush_events()
 # Cleanup
 pipe1.stop()
 pipe2.stop()

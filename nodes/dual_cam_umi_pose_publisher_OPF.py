@@ -8,25 +8,13 @@ import rospy
 from geometry_msgs.msg import PoseStamped
 import tf.transformations as tft
 import tf
+from geometry_msgs.msg import Vector3
+from visualization_msgs.msg import Marker
+from scipy.spatial.transform import Rotation
+from OPF_new import OPF_3d
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import transforms3d as t3d
-from OPF_quat2 import OPF_3d
-
-
-def create_pose_msg(matrix, frame_id):
-    pose_msg = PoseStamped()
-    pose_msg.header.stamp = rospy.Time.now()
-    pose_msg.header.frame_id = frame_id
-    pose_msg.pose.position.x = matrix[0, 3]
-    pose_msg.pose.position.y = matrix[1, 3]
-    pose_msg.pose.position.z = matrix[2, 3]
-    quat = tft.quaternion_from_matrix(matrix)
-    pose_msg.pose.orientation.x = quat[0]
-    pose_msg.pose.orientation.y = quat[1]
-    pose_msg.pose.orientation.z = quat[2]
-    pose_msg.pose.orientation.w = quat[3]
-    return pose_msg
 
 def visualize_opf_particles(opf_obj):
     fig = plt.figure()
@@ -52,18 +40,19 @@ plt.ion()
 fig = plt.figure(figsize=(8,8))
 ax = fig.add_subplot(111,projection='3d')
 
-
-# def calc_avg_pose(poses):
-#     avg_translation = np.mean([p[:3, 3] for p in poses], axis=0)
-#     # Extract rotation matrices and create a single Rotation object
-#     rotation_mats = [p[:3, :3] for p in poses]
-#     rotation_obj = Rotation.from_matrix(rotation_mats)
-#     # Compute mean rotation using chordal L2 minimization
-#     avg_rotation = rotation_obj.mean()
-#     avg_pose = np.eye(4)
-#     avg_pose[:3, 3] = avg_translation
-#     avg_pose[:3, :3] = avg_rotation.as_matrix() #avg_rotation
-#     return avg_pose
+def create_pose_msg(matrix, frame_id):
+    pose_msg = PoseStamped()
+    pose_msg.header.stamp = rospy.Time.now()
+    pose_msg.header.frame_id = frame_id
+    pose_msg.pose.position.x = matrix[0, 3]
+    pose_msg.pose.position.y = matrix[1, 3]
+    pose_msg.pose.position.z = matrix[2, 3]
+    quat = tft.quaternion_from_matrix(matrix)
+    pose_msg.pose.orientation.x = quat[0]
+    pose_msg.pose.orientation.y = quat[1]
+    pose_msg.pose.orientation.z = quat[2]
+    pose_msg.pose.orientation.w = quat[3]
+    return pose_msg
 
 umi_tag_size = 0.050
 base_tag_size = 0.040
@@ -112,10 +101,6 @@ for device in context.devices:
 # Device Name: Intel RealSense D435  ######## Serial Number: 215322079295
 # Device Name: Intel RealSense D435I ######## Serial Number: 146322071247, 146322071961
 
-##############################################################################
-##############################################################################
-##############################################################################
-
 # Initialize ROS node
 rospy.init_node('dual_cam_umi_gripper_pose_publisher')
 
@@ -128,6 +113,8 @@ cam1_pose_pub = rospy.Publisher('/camera1_pose', PoseStamped, queue_size=10)
 cam2_pose_pub = rospy.Publisher('/camera2_pose', PoseStamped, queue_size=10)
 
 tf_broadcaster = tf.TransformBroadcaster()
+
+obj_OPF = OPF_3d(num_particles = 5000, name="umi_gripper")
 
 # Camera initialization
 pipe1 = rs.pipeline()
@@ -160,6 +147,8 @@ K2 = np.array([[intr2.fx, 0, intr2.ppx],
 # AprilTag configuration
 options = apriltag.DetectorOptions(families='tag36h11', nthreads=4)
 detector = apriltag.Detector(options)
+
+
 
 def process_camera(pipe, camera_index):
     frames = pipe.wait_for_frames()
@@ -208,137 +197,145 @@ pixel_coordinates_list_2 = []
 base_cube_pose_1 = np.eye(4)
 base_cube_pose_2 = np.eye(4)
 
+
 # Initialize camera-to-base transforms
 last_known_base_pose_1 = np.eye(4)
 last_known_base_pose_2 = np.eye(4)
 
-obj_OPF = OPF_3d(num_particles = 5000, name="umi_gripper")
-obj_OPF_base = OPF_3d(num_particles= 1000, name = "base_block")
-
-
 while not rospy.is_shutdown():
 
-    detections1, img1 = process_camera(pipe1, 1)
-    detections2, img2 = process_camera(pipe2, 2)
+    detections1, img1 = process_camera(pipe1, 1)    
+    detections2, img2 = process_camera(pipe2, 2)    
 
-    base_poses_1, base_poses_2 = [], []
-    umi_poses_1, umi_poses_2 = [], []
-    base_measurements, valid_measurements = [], []
-
+    umi_poses_1 = []
+    base_poses_1 = []
+    umi_poses_2 = []
+    base_poses_2 = []
+    
     rospy.loginfo_throttle(1.0, f"CAM1 Detected tag IDs: {[det['id'] for det in detections1]}")
     rospy.loginfo_throttle(1.0, f"CAM2 Detected tag IDs: {[det['id'] for det in detections2]}")
 
-    def process_detection(det, base_pose_storage, is_base=True):
-        tag_id = det['id']
-        pose = det['pose']
-        if is_base:
-            rot = base_tags[tag_id]
-            size = base_tag_size
-        else:
-            rot = umi_tags[tag_id]
-            size = umi_tag_size
-
-        T_adj = np.eye(4)
-        T_adj[:3, :3] = rot
-        T_adj[:3, 3] = [0, 0, size/2]
-
-        T_corrected = pose @ T_adj
-
-        quat = np.roll(t3d.quaternions.mat2quat(T_corrected[:3, :3]), -1)
-        measurement = {'value': np.hstack((T_corrected[:3, 3], quat)), 'weight': 1.0}
-        base_pose_storage.append(T_corrected)
-        return measurement
-
-    # ─── Camera 1 detections ─────────────────────────
+    # Process detections to populate umi_poses_* and base_poses_*
     for det in detections1:
-        if det['id'] in base_tags:
-            base_measurements.append(process_detection(det, base_poses_1, is_base=True))
-        elif det['id'] in umi_tags:
-            valid_measurements.append(process_detection(det, umi_poses_1, is_base=False))
-
-    # ─── Camera 2 detections ─────────────────────────
+        if det['id'] in umi_tags:
+            umi_poses_1.append(det['pose'])
+        elif det['id'] in base_tags:
+            base_poses_1.append(det['pose'])
+    
     for det in detections2:
-        if det['id'] in base_tags:
-            base_measurements.append(process_detection(det, base_poses_2, is_base=True))
-        elif det['id'] in umi_tags:
-            valid_measurements.append(process_detection(det, umi_poses_2, is_base=False))
+        if det['id'] in umi_tags:
+            umi_poses_2.append(det['pose'])
+        elif det['id'] in base_tags:
+            base_poses_2.append(det['pose'])
 
-    # ─── BASE OPF FILTER ─────────────────────────────
-    if base_measurements:
-        obj_OPF_base.predict()
-        obj_OPF_base.update_all(base_measurements)
-        obj_OPF_base.systematic_resample()
-        obj_OPF_base.resample_from_index()
+# Update last known base poses if new ones are available
+    if len(base_poses_1) > 0:
+        last_known_base_pose_1 = base_poses_1[0]  
+    if len(base_poses_2) > 0:
+        last_known_base_pose_2 = base_poses_2[0]
 
-        T_base_filtered = np.eye(4)
-        T_base_filtered[:3, 3] = obj_OPF_base.curr_pos
-        qb = obj_OPF_base.curr_pos1
-        quat_wxyz = [qb[3], qb[0], qb[1], qb[2]]
-        T_base_filtered[:3, :3] = t3d.quaternions.quat2mat(quat_wxyz)
-    else:
-        obj_OPF_base.predict()
-        T_base_filtered = last_known_base_pose_1  # fallback
+    
+  # Camera-to-base transforms
+    camera1_to_base = np.linalg.inv(last_known_base_pose_1)
+    camera2_to_base = np.linalg.inv(last_known_base_pose_2)
 
-    # Camera-to-base frames
-    if base_poses_1:
-        observed1 = base_poses_1[0]
-        camera1_to_base = np.linalg.inv(observed1) @ T_base_filtered
-        last_known_base_pose_1 = np.linalg.inv(camera1_to_base)
-    else:
-        camera1_to_base = np.linalg.inv(last_known_base_pose_1)
+    # Collect valid measurements
+    valid_measurements = []
 
-    if base_poses_2:
-        observed2 = base_poses_2[0]
-        camera2_to_base = np.linalg.inv(observed2) @ T_base_filtered
-        last_known_base_pose_2 = np.linalg.inv(camera2_to_base)
-    else:
-        camera2_to_base = np.linalg.inv(last_known_base_pose_2)
+# Use all umi from cam1 + base from cam1 or fallback
+    if len(umi_poses_1) > 0:
+        base_pose = base_poses_1[0] if len(base_poses_1) > 0 else last_known_base_pose_1
+        for umi_pose in umi_poses_1:
+            umi_cube_wrt_base_1 = np.linalg.inv(base_pose) @ umi_pose
+            trans = umi_cube_wrt_base_1[:3, 3]
+            rot_matrix = umi_cube_wrt_base_1[:3, :3]
+            euler_angles = t3d.euler.mat2euler(rot_matrix)
+            measurement = np.array([*trans, *euler_angles])
+            valid_measurements.append(measurement)
+    # Use all umi from cam2 + base from cam2 or fallback
+    if len(umi_poses_2) > 0:
+        base_pose = base_poses_2[0] if len(base_poses_2) > 0 else last_known_base_pose_2
+        for umi_pose in umi_poses_2:
+            umi_cube_wrt_base_2 = np.linalg.inv(base_pose) @ umi_pose
+            trans = umi_cube_wrt_base_2[:3, 3]
+            rot_matrix = umi_cube_wrt_base_2[:3, :3]
+            euler_angles = t3d.euler.mat2euler(rot_matrix)
+            measurement = np.array([*trans, *euler_angles])
+            valid_measurements.append(measurement)
 
-    # ─── UMI OPF FILTER ───────────────────────────────
-    if valid_measurements:
+    if len(valid_measurements) == 0:
+        rospy.logwarn_throttle(3.0, "No valid umi + base pose pairs found. Using prediction.")
+        # Just Predict, do not update
         obj_OPF.predict()
-        obj_OPF.update_all(valid_measurements)
+        # You can choose to increase uncertainty dynamically here if you want:
+        # obj_OPF.hidden_factor *= 1.02  # Optional uncertainty scaling
+    else:
+        # Predict and Update with measurements
+        obj_OPF.predict()
+        for measurement in valid_measurements:
+            obj_OPF.update(measurement)
         obj_OPF.systematic_resample()
         obj_OPF.resample_from_index()
-    else:
-        obj_OPF.predict()
 
-    # ─── EXTRACT POSES ────────────────────────────────
-    Tg = np.eye(4)
-    Tg[:3, 3] = obj_OPF.curr_pos
-    qg = obj_OPF.curr_pos1
-    quat_wxyz_g = [qg[3], qg[0], qg[1], qg[2]]
-    Tg[:3, :3] = t3d.quaternions.quat2mat(quat_wxyz_g)
 
-    umi_cube_pose = Tg
+    filtered_translation = obj_OPF.curr_pos
+    filtered_orientation = obj_OPF.curr_pos1
+    filtered_rot_matrix = t3d.euler.euler2mat(*filtered_orientation)
+
+    umi_cube_pose = np.eye(4)
+    umi_cube_pose[:3, 3] = filtered_translation
+    umi_cube_pose[:3, :3] = filtered_rot_matrix
+
     umi_ee_pose = umi_cube_pose @ umi_to_gripper
 
-    # ─── TF + POSE PUBS ───────────────────────────────
+    # Publish poses
+    umi_pose_msg = create_pose_msg(umi_cube_pose, "umi_cube")
+    umi_cube_pose_pub.publish(umi_pose_msg)
+
+    umi_pose_msg = create_pose_msg(umi_ee_pose, "umi_ee")
+    umi_ee_pose_pub.publish(umi_pose_msg)
+
+    # Publish TF transforms
     tf_broadcaster.sendTransform(
-        tuple(umi_cube_pose[:3, 3]),
+        (umi_cube_pose[0, 3], umi_cube_pose[1, 3], umi_cube_pose[2, 3]),
         tft.quaternion_from_matrix(umi_cube_pose),
         rospy.Time.now(), "umi_cube", "april_base")
 
     tf_broadcaster.sendTransform(
-        tuple(umi_ee_pose[:3, 3]),
+        (umi_ee_pose[0, 3], umi_ee_pose[1, 3], umi_ee_pose[2, 3]),
         tft.quaternion_from_matrix(umi_ee_pose),
         rospy.Time.now(), "umi_ee", "april_base")
 
     tf_broadcaster.sendTransform(
-        tuple(camera1_to_base[:3, 3]),
+        (camera1_to_base[0, 3], camera1_to_base[1, 3], camera1_to_base[2, 3]),
         tft.quaternion_from_matrix(camera1_to_base),
         rospy.Time.now(), "cam1", "april_base")
 
     tf_broadcaster.sendTransform(
-        tuple(camera2_to_base[:3, 3]),
+        (camera2_to_base[0, 3], camera2_to_base[1, 3], camera2_to_base[2, 3]),
         tft.quaternion_from_matrix(camera2_to_base),
         rospy.Time.now(), "cam2", "april_base")
 
-    # ─── Visual Feedback ──────────────────────────────
+    # Visualization remains the same
     cv2.imshow('Camera 1', img1)
     cv2.imshow('Camera 2', img2)
     cv2.waitKey(1)
-
-# Cleanup
-pipe1.stop()
-pipe2.stop()
+    
+# Plotting
+    ax.clear()
+    particles = obj_OPF.particles
+    trajectory = np.array(obj_OPF.trajectory)
+    # Plot particles
+    ax.scatter(particles[:, 0], particles[:, 1], particles[:, 2], c='blue', s=1, label='Particles')
+    # Plot estimated pose
+    ax.scatter(obj_OPF.curr_pos[0], obj_OPF.curr_pos[1], obj_OPF.curr_pos[2], c='red', s=50, label='Estimated Pose')
+    # Plot trajectory
+    ax.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], c='green', label='Trajectory')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('OPF Particle Visualization')
+    ax.legend()
+    plt.draw()
+    plt.pause(0.01)  # pause to update the figure
+    fig.canvas.flush_events()

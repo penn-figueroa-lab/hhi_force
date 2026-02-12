@@ -1,0 +1,7 @@
+<launch>
+
+    <node name="umi_pose_publisher" pkg="hhi_force" type="dual_cam_umi_pose_publisher_quat.py" output="screen" />
+
+    <!-- Launch RViz -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find hhi_force)/config/umi_pose_publisher.rviz" output="screen" />
+</launch>

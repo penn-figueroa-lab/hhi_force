@@ -11,9 +11,6 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   sensor_msgs
   std_msgs
-  iiwa_tools
-  xela_server_ros
-
 )
 
 ## Declare ROS messages, services, and actions
@@ -36,7 +33,7 @@ find_package(catkin REQUIRED COMPONENTS
 
 ## Declare a catkin package
 catkin_package(
-  CATKIN_DEPENDS iiwa_tools roscpp rospy sensor_msgs std_msgs xela_server_ros
+  CATKIN_DEPENDS roscpp rospy sensor_msgs std_msgs 
 )
 
 ## Include directories
